@@ -6,27 +6,71 @@ description: >
   the user shares code and asks to be quizzed, tested, or walked through it — or
   says things like "quiz me on this", "help me understand this code", "annotate
   this with my explanations", "walk me through this", or "explain this to me block
-  by block". Also trigger if the user pastes code and asks Claude to help them
-  learn or understand it interactively. Do NOT use for passive code explanation
-  requests where the user just wants Claude to explain the code without any
-  back-and-forth.
+  by block". Also trigger when the user points at a file path, line range, function
+  name, or directory and asks to be quizzed — e.g. "quiz me on src/auth.py lines
+  40-80", "walk me through the authenticate() function", "quiz me on the src/auth/
+  folder". Also trigger if the user pastes code and asks Claude to help them learn
+  or understand it interactively. Do NOT use for passive code explanation requests
+  where the user just wants Claude to explain the code without any back-and-forth.
 ---
 
-# Code Quiz Annotator
+# Quiz Me Docs
 
 Interactively walk the user through their code block by block, quizzing them on
 what each block does, then annotating the code with a refined version of their
 answer as a comment.
 
+Supports three input modes — pasted code, targeted file/range/function, and
+directory walk — described in Step 0 below.
+
+---
+
+## Step 0 — Determine Input Mode
+
+Identify which mode the user is invoking:
+
+### Mode A — Pasted code
+The user pastes code directly into the chat. Skip to Step 1.
+
+### Mode B — File targeting (file path + optional line range or block name)
+The user points at a specific file, with an optional narrowing:
+- `"quiz me on src/auth.py"` → read the whole file
+- `"quiz me on src/auth.py lines 45–120"` → read only those lines
+- `"quiz me on the authenticate() function in src/auth.py"` → read the file,
+  isolate just that function/class/block by name
+
+**How to handle:**
+1. Read the file from disk using bash (`cat` or `sed -n '45,120p'` for a range).
+2. If a block name was given, find it in the file and extract it (include the full
+   function/class body, not just the signature).
+3. Confirm what you loaded: "Got it — I've loaded `authenticate()` from
+   `src/auth.py` (lines 62–89). Ready to start?"
+4. Proceed to Step 1 with the extracted code.
+
+### Mode C — Directory walk
+The user points at a directory:
+- `"quiz me on src/auth/"` or `"walk me through the auth module"`
+
+**How to handle:**
+1. List the files in the directory (non-recursively by default; go recursive only
+   if the user asks or the directory is small). Show the user the file list and ask
+   which ones to include — or confirm "all of them" if they said so.
+2. Work through files one at a time, in a sensible order (entry points first if
+   obvious, then dependencies, then utilities). Announce the file before starting
+   it: "Starting `auth.py` (file 1 of 3)."
+3. Between files, ask: "Ready for the next file, or want to skip ahead?" — respect
+   skips.
+4. After the last file, offer a combined annotated export of all files.
+
 ---
 
 ## Step 1 — Parse the Code into Blocks
 
-When the user shares code, mentally segment it into logical blocks in top-to-bottom
-order. Blocks are, in priority order:
+Mentally segment the loaded code into logical blocks in top-to-bottom order.
+Blocks are, in priority order:
 
 1. **Classes** — the entire class as one block (do NOT sub-divide into methods at
-   this level; methods are their own blocks when you reach them)
+   this level; methods are their own blocks when you reach them inside the class)
 2. **Functions / methods** — each function or method is its own block
 3. **Logical sections** — inside functions (or at the top level if there are no
    functions), group by logical purpose: imports, configuration, loops,
@@ -122,14 +166,17 @@ for (const item of cartItems) {
 
 After each block, show a subtle progress indicator if there are more than 3 blocks
 total — e.g., "(2 of 5)" after the annotated block. This helps the user know how
-far along they are without being intrusive.
+far along they are without being intrusive. In directory mode, also show the file
+progress — e.g., "(block 2 of 5 · file 1 of 3)".
 
-When all blocks are done:
+When all blocks in the current scope are done:
 
 1. Show the **complete annotated file** in a single code fence.
 2. Give a short encouraging closing — e.g., "Here's your fully annotated file!
    Nice work talking through all of it."
-3. Offer to export it: "Want me to save this to a file?"
+3. Offer to write the annotated version back to disk: "Want me to save the
+   annotated version back to `src/auth.py`?" (In directory mode, offer to save
+   all files at once at the very end.)
 
 ---
 
